@@ -31,44 +31,31 @@ def analyze(request):
     # STEP 2: DATA SOURCE
     # =========================
 
-    # -------- MOCKED DATA (CURRENT DEV MODE) --------
-    history = {
-        "chief_complaint": "Blurred vision",
-        "past_history": ["Diabetes Mellitus"]
-    }
+    # Prefer the 'emr' object in POST body; otherwise accept explicit keys; else fallback to mocked data
+    emr = body.get("emr")
 
-    examination = {
-        "right_eye": "Reduced visual acuity",
-        "left_eye": "Normal"
-    }
+    if emr and isinstance(emr, dict):
+        history = emr.get("history", {})
+        examination = emr.get("examination", {})
+        investigation = emr.get("investigation", [])
+    else:
+        history = body.get("history", {})
+        examination = body.get("examination", {})
+        investigation = body.get("investigation", [])
 
-    investigation = {
-        "HbA1c": "8.2%",
-        "FBS": "160 mg/dL"
-    }
-
-    # -------- REAL EMR API (TO BE ENABLED LATER) --------
-    """
-    import requests
-
-    history = requests.get(
-        f"{EMR_BASE_URL}/emr/history/",
-        params={"case_id": case_id, "patient_id": patient_id},
-        headers={"Authorization": f"Bearer {TOKEN}"}
-    ).json()
-
-    examination = requests.get(
-        f"{EMR_BASE_URL}/emr/examination/",
-        params={"case_id": case_id},
-        headers={"Authorization": f"Bearer {TOKEN}"}
-    ).json()
-
-    investigation = requests.get(
-        f"{EMR_BASE_URL}/emr/investigation/",
-        params={"case_id": case_id},
-        headers={"Authorization": f"Bearer {TOKEN}"}
-    ).json()
-    """
+    # If nothing provided, keep a small mocked fallback for development convenience
+    if not any((history, examination, investigation)):
+        history = {
+            "chief_complaint": "Blurred vision",
+            "past_history": ["Diabetes Mellitus"]
+        }
+        examination = {
+            "right_eye": "Reduced visual acuity",
+            "left_eye": "Normal"
+        }
+        investigation = [
+            {"name": "HbA1c", "value": "8.2", "unit": "%"},
+        ]
 
     # =========================
     # STEP 3: FILTER & COMPRESS
@@ -80,37 +67,25 @@ def analyze(request):
     })
 
     # =========================
-    # STEP 4: LLM CALL
+    # STEP 4: DETERMINISTIC REPORT GENERATOR
     # =========================
+    from ai_bot.services.report_generator import generate_report
 
-    # -------- MOCKED LLM RESPONSE (CURRENT) --------
-    ai_output = {
-        "summary": "Patient presents with blurred vision and a history of diabetes.",
-        "key_insights": [
-            "Chronic diabetes with poor glycemic control",
-            "Visual symptoms may be diabetes-related"
-        ],
-        "clinical_risks": [
-            "Risk of diabetic retinopathy"
-        ],
-        "suggested_next_steps": [
-            "Detailed retinal examination",
-            "Optimize blood glucose control"
-        ],
-        "confidence_level": "medium"
-    }
-
-    # -------- REAL LLM CALL (TO BE ENABLED LATER) --------
-    """
-    ai_output = generate_summary(llm_payload)
-    """
+    report = generate_report(llm_payload)
 
     # =========================
     # STEP 5: RESPONSE
     # =========================
-    return JsonResponse({
+    response = {
         "status": "success",
         "case_id": case_id,
         "patient_id": patient_id,
-        "ai_output": ai_output
-    })
+        "ai_output": report.get("ai_output"),
+        "meta": {
+            "audit": report.get("audit") or llm_payload.get("meta", {}).get("audit"),
+            "safety": llm_payload.get("meta", {}).get("safety"),
+            "risk_flags": llm_payload.get("meta", {}).get("risk_flags"),
+        }
+    }
+
+    return JsonResponse(response)
